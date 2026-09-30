@@ -12,15 +12,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify Docker Hub credentials
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            echo "DOCKERHUB_USERNAME is missing"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "DOCKERHUB_TOKEN is missing"
+            exit 1
+          fi
+
+          echo "Docker Hub credentials are configured."
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # ------------------------------------------------------------
+      # ============================================================
       # ORIGINAL IMAGE
-      # ------------------------------------------------------------
+      # ============================================================
 
       - name: Build original Docker image
         run: |
@@ -33,19 +48,58 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/todo-app:original'
+          scan-type: 'image'
           format: 'table'
           scanners: 'vuln'
+          vuln-type: 'os,library'
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          ignore-unfixed: false
+          hide-progress: true
+          exit-code: '0'
+
+      - name: Create original vulnerability report
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/todo-app:original'
+          scan-type: 'image'
+          format: 'json'
+          output: 'trivy-original.json'
+          scanners: 'vuln'
+          vuln-type: 'os,library'
           severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: false
           exit-code: '0'
+
+      - name: Display original vulnerability count
+        shell: bash
+        run: |
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-original.json)
+          HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-original.json)
+          MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' trivy-original.json)
+          LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "LOW")] | length' trivy-original.json)
+          UNKNOWN=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "UNKNOWN")] | length' trivy-original.json)
+          TOTAL=$((CRITICAL + HIGH + MEDIUM + LOW + UNKNOWN))
+
+          echo "=========================================="
+          echo " ORIGINAL IMAGE VULNERABILITY BREAKDOWN"
+          echo "=========================================="
+          echo "Image: ${{ secrets.DOCKERHUB_USERNAME }}/todo-app:original"
+          echo ""
+          echo "Critical: $CRITICAL"
+          echo "High:     $HIGH"
+          echo "Medium:   $MEDIUM"
+          echo "Low:      $LOW"
+          echo "Unknown:  $UNKNOWN"
+          echo "Total:    $TOTAL"
+          echo "=========================================="
 
       - name: Push original image to Docker Hub
         run: |
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/todo-app:original
 
-      # ------------------------------------------------------------
+      # ============================================================
       # REMEDIATED IMAGE
-      # ------------------------------------------------------------
+      # ============================================================
 
       - name: Build remediated Docker image
         run: |
@@ -59,17 +113,56 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/todo-app:remediated'
+          scan-type: 'image'
           format: 'table'
           scanners: 'vuln'
+          vuln-type: 'os,library'
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          ignore-unfixed: false
+          hide-progress: true
+          exit-code: '0'
+
+      - name: Create remediated vulnerability report
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/todo-app:remediated'
+          scan-type: 'image'
+          format: 'json'
+          output: 'trivy-remediated.json'
+          scanners: 'vuln'
+          vuln-type: 'os,library'
           severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
           ignore-unfixed: false
           exit-code: '0'
+
+      - name: Display remediated vulnerability count
+        shell: bash
+        run: |
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-remediated.json)
+          HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-remediated.json)
+          MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' trivy-remediated.json)
+          LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "LOW")] | length' trivy-remediated.json)
+          UNKNOWN=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "UNKNOWN")] | length' trivy-remediated.json)
+          TOTAL=$((CRITICAL + HIGH + MEDIUM + LOW + UNKNOWN))
+
+          echo "=========================================="
+          echo " REMEDIATED IMAGE VULNERABILITY BREAKDOWN"
+          echo "=========================================="
+          echo "Image: ${{ secrets.DOCKERHUB_USERNAME }}/todo-app:remediated"
+          echo ""
+          echo "Critical: $CRITICAL"
+          echo "High:     $HIGH"
+          echo "Medium:   $MEDIUM"
+          echo "Low:      $LOW"
+          echo "Unknown:  $UNKNOWN"
+          echo "Total:    $TOTAL"
+          echo "=========================================="
 
       - name: Push remediated image to Docker Hub
         run: |
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/todo-app:remediated
 
-      - name: Tag remediated image as latest
+      - name: Tag and push latest image
         run: |
           docker tag \
             ${{ secrets.DOCKERHUB_USERNAME }}/todo-app:remediated \
@@ -77,18 +170,3 @@ jobs:
 
           docker push \
             ${{ secrets.DOCKERHUB_USERNAME }}/todo-app:latest
-
-      # ------------------------------------------------------------
-      # SUMMARY
-      # ------------------------------------------------------------
-
-      - name: Create workflow summary
-        run: |
-          echo "# Docker Container Security Lab" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "## Images created" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Original: \`${{ secrets.DOCKERHUB_USERNAME }}/todo-app:original\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Remediated: \`${{ secrets.DOCKERHUB_USERNAME }}/todo-app:remediated\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Latest: \`${{ secrets.DOCKERHUB_USERNAME }}/todo-app:latest\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Both images were built, scanned with Trivy, and pushed to Docker Hub." >> "$GITHUB_STEP_SUMMARY"
