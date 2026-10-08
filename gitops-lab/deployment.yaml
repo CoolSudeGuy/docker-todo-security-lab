@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: todo-app
-          image: coolsudeguy/todo-app
+          image: coolsudeguy/todo-app:latest
           imagePullPolicy: Always
           ports:
             - name: http
