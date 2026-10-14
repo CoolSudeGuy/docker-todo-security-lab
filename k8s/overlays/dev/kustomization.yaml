@@ -18,4 +18,3 @@ images:
 labels:
   - pairs:
       environment: dev
-    includeSelectors: false
