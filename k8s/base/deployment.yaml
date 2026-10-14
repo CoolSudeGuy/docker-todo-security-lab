@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-app
+  namespace: gitops-lab
+  labels:
+    app.kubernetes.io/name: todo-app
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: todo-saas
+
+spec:
+  replicas: 2
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: todo-app
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: todo-app
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: todo-saas
+
+    spec:
+      serviceAccountName: todo-app
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: todo-app
+          image: coolsudeguy/docker-todo-security-lab:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+
+          env:
+            - name: NODE_ENV
+              value: production
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+          volumeMounts:
+            - name: todo-data
+              mountPath: /etc/todos
+
+            - name: temporary-files
+              mountPath: /tmp
+
+      volumes:
+        - name: todo-data
+          persistentVolumeClaim:
+            claimName: todo-data
+
+        - name: temporary-files
+          emptyDir:
+            sizeLimit: 100Mi
+
+      terminationGracePeriodSeconds: 30
