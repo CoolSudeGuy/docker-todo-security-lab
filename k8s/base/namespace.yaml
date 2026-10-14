@@ -4,3 +4,4 @@ metadata:
   name: gitops-lab
   labels:
     app.kubernetes.io/part-of: todo-saas
+    app.kubernetes.io/managed-by: argocd
