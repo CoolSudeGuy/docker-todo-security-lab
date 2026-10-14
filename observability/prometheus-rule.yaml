@@ -1,0 +1,32 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: todo-app-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+
+spec:
+  groups:
+    - name: todo-app.rules
+
+      rules:
+        - alert: TodoAppNoAvailableReplicas
+
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="gitops-lab",
+              deployment="todo-app"
+            } < 1
+
+          for: 2m
+
+          labels:
+            severity: critical
+            service: todo-app
+
+          annotations:
+            summary: Todo application has no available replicas
+            description: >-
+              The todo-app deployment has had zero available replicas
+              for more than two minutes.
