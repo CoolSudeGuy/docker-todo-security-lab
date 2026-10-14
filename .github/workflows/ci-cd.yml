@@ -1,0 +1,126 @@
+name: CI, Container Build, and GitOps Update
+
+on:
+  pull_request:
+    branches:
+      - main
+
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "k8s/overlays/**"
+      - "README.md"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: coolsudeguy/docker-todo-security-lab
+
+jobs:
+  test:
+    name: Test application
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test --if-present
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  build-and-push:
+    name: Build and push container
+    if: github.event_name != 'pull_request'
+    needs:
+      - test
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Sign in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set image metadata
+        id: meta
+        shell: bash
+        run: |
+          TAG=sha-${GITHUB_SHA::12}
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "tags=${IMAGE_NAME}:$TAG,${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push secured image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+  update-gitops:
+    name: Update GitOps manifest
+    if: github.event_name != 'pull_request'
+    needs:
+      - build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update production image tag
+        env:
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          sed -i -E \
+            "s#newTag: .*#newTag: ${IMAGE_TAG}#" \
+            k8s/overlays/prod/kustomization.yaml
+
+      - name: Commit GitOps change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add k8s/overlays/prod/kustomization.yaml
+
+          git diff --cached --quiet || \
+            git commit \
+              -m "deploy: ${GITHUB_SHA::12} to production [skip ci]"
+
+          git push
