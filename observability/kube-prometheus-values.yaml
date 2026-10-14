@@ -1,0 +1,19 @@
+grafana:
+  adminPassword: change-me-before-production
+
+  defaultDashboardsEnabled: true
+
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+
+alertmanager:
+  enabled: true
