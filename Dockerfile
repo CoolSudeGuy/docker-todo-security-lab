@@ -1,151 +1,45 @@
-###################################################
-# Stage: base
-#
-# This base stage ensures all other stages use the
-# same smaller Debian-based Node.js image.
-###################################################
-FROM node:22-slim AS base
+# syntax=docker/dockerfile:1.7
+
+FROM node:22-alpine AS dependencies
 
 WORKDIR /usr/local/app
 
+COPY package*.json ./
 
-################## CLIENT STAGES ##################
-
-
-###################################################
-# Stage: client-base
-#
-# Installs the client dependencies and copies the
-# client source files.
-###################################################
-FROM base AS client-base
-
-COPY client/package.json client/package-lock.json ./
-COPY .npmrc ./
-
-RUN npm ci
-
-COPY client/.eslintrc.cjs client/index.html client/vite.config.js ./
-COPY client/public ./public
-COPY client/src ./src
+RUN npm ci --omit=dev \
+    && npm cache clean --force
 
 
-###################################################
-# Stage: client-dev
-#
-# Starts the Vite development server.
-###################################################
-FROM client-base AS client-dev
-
-CMD ["npm", "run", "dev"]
-
-
-###################################################
-# Stage: client-build
-#
-# Builds the static client application.
-###################################################
-FROM client-base AS client-build
-
-RUN npm run build
-
-
-################# BACKEND STAGES ##################
-
-
-###################################################
-# Stage: sqlite3-build
-#
-# Installs the build tools needed to compile the
-# sqlite3 native Node.js module. These tools remain
-# in this temporary stage and are not included in
-# the final production image.
-###################################################
-FROM base AS sqlite3-build
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python3 \
-        make \
-        g++ && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY backend/package.json backend/package-lock.json ./
-COPY .npmrc ./
-
-RUN npm ci && \
-    cd node_modules/sqlite3 && \
-    ../.bin/node-gyp rebuild
-
-
-###################################################
-# Stage: backend-dev
-#
-# Installs the backend dependencies and copies the
-# compiled sqlite3 binary from the build stage.
-###################################################
-FROM base AS backend-dev
-
-COPY backend/package.json backend/package-lock.json ./
-COPY .npmrc ./
-
-RUN npm ci
-
-COPY --from=sqlite3-build \
-    /usr/local/app/node_modules/sqlite3/build \
-    ./node_modules/sqlite3/build
-
-COPY backend/spec ./spec
-COPY backend/src ./src
-
-CMD ["npm", "run", "dev"]
-
-
-###################################################
-# Stage: test
-#
-# Runs the backend automated tests.
-###################################################
-FROM backend-dev AS test
-
-RUN npm run test
-
-
-###################################################
-# Stage: final
-#
-# Creates the smaller production image containing
-# only the production dependencies, backend source,
-# compiled sqlite3 module, and built client.
-###################################################
-FROM base AS final
+FROM node:22-alpine AS runtime
 
 ENV NODE_ENV=production
 
-COPY --from=test \
-    /usr/local/app/package.json \
-    /usr/local/app/package-lock.json \
-    ./
+WORKDIR /usr/local/app
 
-COPY .npmrc ./
+RUN apk add --no-cache dumb-init \
+    && addgroup -S appgroup \
+    && adduser -S -G appgroup -u 10001 appuser \
+    && mkdir -p /etc/todos \
+    && chown -R appuser:appgroup /usr/local/app /etc/todos
 
-RUN npm ci --omit=dev && \
-    npm cache clean --force
+COPY --from=dependencies \
+    --chown=appuser:appgroup \
+    /usr/local/app/node_modules \
+    ./node_modules
 
-COPY --from=sqlite3-build \
-    /usr/local/app/node_modules/sqlite3/build \
-    ./node_modules/sqlite3/build
+COPY --chown=appuser:appgroup . .
 
-COPY backend/src ./src
-
-COPY --from=client-build \
-    /usr/local/app/dist \
-    ./src/static
-
-RUN chown -R node:node /usr/local/app
-
-USER node
+USER 10001:10001
 
 EXPOSE 3000
+
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=3s \
+    --start-period=10s \
+    --retries=3 \
+    CMD wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 
 CMD ["node", "src/index.js"]
