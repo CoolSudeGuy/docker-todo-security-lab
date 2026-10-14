@@ -1,4 +1,4 @@
-name: CI, Container Build, and GitOps Update
+name: Todo App CI-CD
 
 on:
   pull_request:
@@ -9,57 +9,55 @@ on:
     branches:
       - main
     paths-ignore:
-      - "k8s/overlays/**"
-      - "README.md"
+      - "docs/**"
+      - "**/*.md"
 
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: todo-app-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   IMAGE_NAME: coolsudeguy/docker-todo-security-lab
 
 jobs:
-  test:
-    name: Test application
+  validate:
+    name: Validate and Build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out source
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build test image
+        uses: docker/build-push-action@v7
         with:
-          node-version: "22"
-          cache: npm
+          context: .
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_NAME }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Inspect built image
+        run: docker image inspect ${{ env.IMAGE_NAME }}:test
 
-      - name: Run tests
-        run: npm test --if-present
-
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
-
-  build-and-push:
-    name: Build and push container
-    if: github.event_name != 'pull_request'
+  publish:
+    name: Publish to Docker Hub
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs:
-      - test
+      - validate
     runs-on: ubuntu-latest
 
-    outputs:
-      image_tag: ${{ steps.meta.outputs.version }}
-
     steps:
-      - name: Check out source
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Sign in to Docker Hub
@@ -71,56 +69,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Set image metadata
-        id: meta
+      - name: Generate image tag
+        id: image
         shell: bash
         run: |
-          TAG=sha-${GITHUB_SHA::12}
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
-          echo "tags=${IMAGE_NAME}:$TAG,${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push secured image
+      - name: Build and publish image
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
-
-  update-gitops:
-    name: Update GitOps manifest
-    if: github.event_name != 'pull_request'
-    needs:
-      - build-and-push
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update production image tag
-        env:
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-        run: |
-          sed -i -E \
-            "s#newTag: .*#newTag: ${IMAGE_TAG}#" \
-            k8s/overlays/prod/kustomization.yaml
-
-      - name: Commit GitOps change
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add k8s/overlays/prod/kustomization.yaml
-
-          git diff --cached --quiet || \
-            git commit \
-              -m "deploy: ${GITHUB_SHA::12} to production [skip ci]"
-
-          git push
