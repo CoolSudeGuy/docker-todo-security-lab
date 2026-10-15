@@ -8,7 +8,7 @@ resources:
 
 replicas:
   - name: todo-app
-    count: 2
+    count: 0
 
 images:
   - name: coolsudeguy/docker-todo-security-lab
